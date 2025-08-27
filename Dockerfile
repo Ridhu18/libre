@@ -14,15 +14,19 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and install deps
-COPY package.json .
-RUN npm install --production
+# Copy package files first for better caching
+COPY package*.json ./
+
+# Clear npm cache and install dependencies
+RUN npm cache clean --force && \
+    npm install --production --no-audit --no-fund --verbose --no-audit --no-fund
 
 # Copy app files
 COPY . .
 
 # Create a non-root user for security
-RUN useradd -r -u 1001 -g root nodeuser
+RUN useradd -r -u 1001 -g root nodeuser && \
+    chown -R nodeuser:root /app
 USER nodeuser
 
 EXPOSE 3000
