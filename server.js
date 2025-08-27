@@ -148,17 +148,33 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
       
       // Continue with conversion if LibreOffice is available
       const inputFile = req.file.path;
-      const outputFile = inputFile.replace('.pdf', '.docx');
+      const inputDir = path.dirname(inputFile);
+      const inputBasename = path.basename(req.file.originalname, path.extname(req.file.originalname));
+      const outputFile = path.join(inputDir, `${inputBasename}.docx`);
       const quality = req.body.quality || 'standard';
+      
+      // Verify input file is a PDF
+      const inputExt = path.extname(req.file.originalname).toLowerCase();
+      if (inputExt !== '.pdf') {
+        console.error('Invalid file type:', inputExt);
+        return res.status(400).json({ 
+          success: false,
+          error: 'Invalid file type',
+          details: `Expected PDF file, got ${inputExt}`,
+          suggestion: 'Please upload a PDF file'
+        });
+      }
 
       console.log('File received:', req.file.originalname, 'Size:', req.file.size);
       console.log('Input file:', inputFile);
       console.log('Output file:', outputFile);
       console.log('Conversion quality:', quality);
 
-      // Try primary conversion method with simpler options
-      const libreOfficeCmd = `libreoffice --headless --convert-to docx --outdir "${path.dirname(outputFile)}" "${inputFile}"`;
+      // Try primary conversion method with explicit file type handling
+      const libreOfficeCmd = `libreoffice --headless --convert-to docx --outdir "${inputDir}" "${inputFile}"`;
       console.log('Executing command:', libreOfficeCmd);
+      console.log('Input file type:', path.extname(req.file.originalname));
+      console.log('Expected output file:', outputFile);
 
       exec(libreOfficeCmd, { timeout: 120000 }, (error, stdout, stderr) => {
         if (error) {
@@ -181,6 +197,46 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
             });
           }
           
+          // Check for specific LibreOffice errors
+          if (stderr && stderr.includes('no export filter')) {
+            console.log('Export filter error detected, trying alternative conversion method...');
+            
+            // Try alternative conversion method
+            const altCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML --outdir "${inputDir}" "${inputFile}"`;
+            console.log('Trying alternative command:', altCmd);
+            
+            exec(altCmd, { timeout: 120000 }, (altError, altStdout, altStderr) => {
+              if (altError) {
+                console.error('Alternative conversion also failed:', altError);
+                console.error('Alternative stderr:', altStderr);
+                
+                // Clean up input file
+                try {
+                  fs.unlinkSync(inputFile);
+                } catch (cleanupError) {
+                  console.error('Input file cleanup error:', cleanupError);
+                }
+                
+                return res.status(500).json({ 
+                  success: false,
+                  error: 'All conversion methods failed', 
+                  details: 'LibreOffice could not process this PDF file with any available method',
+                  suggestion: 'The PDF may be corrupted, password-protected, or contain unsupported content. Try with a different PDF.'
+                });
+              }
+              
+              console.log('Alternative conversion succeeded');
+              // Continue with the alternative conversion result
+              processConversionResult(altStdout, altStderr);
+            });
+            
+            return; // Exit primary method
+          }
+          
+          if (stderr && stderr.includes('failed to launch javaldx')) {
+            console.log('Java warning detected, but continuing...');
+          }
+          
           return res.status(500).json({ 
             success: false,
             error: 'Conversion failed', 
@@ -193,6 +249,12 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
         console.log('stdout:', stdout);
         if (stderr) console.log('stderr:', stderr);
 
+        // Process the conversion result
+        processConversionResult(stdout, stderr);
+      });
+      
+      // Helper function to process the conversion result
+      function processConversionResult(stdout, stderr) {
         // Check if output file exists
         if (fs.existsSync(outputFile)) {
           // Validate the output file
@@ -245,7 +307,7 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
             suggestion: 'PDF may be corrupted or LibreOffice conversion failed'
           });
         }
-      });
+      }
     });
   } catch (error) {
     console.error('Server error:', error);
