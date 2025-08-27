@@ -19,7 +19,7 @@ COPY package*.json ./
 
 # Clear npm cache and install dependencies
 RUN npm cache clean --force && \
-    npm install --production --no-audit --no-fund --verbose --no-audit --no-fund
+    npm ci --production --no-audit --no-fund
 
 # Copy app files
 COPY . .
