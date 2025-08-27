@@ -4,9 +4,20 @@ const path = require('path');
 const { exec } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// CORS configuration
+const corsOptions = {
+  origin: 'https://novenutility123.netlify.app',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
+};
+
+app.use(cors(corsOptions));
 
 // Middleware
 app.use(express.json());
@@ -75,13 +86,21 @@ app.post('/convert/docx-to-pdf', upload.single('file'), async (req, res) => {
 // Enhanced PDF to Word conversion with multiple fallback methods
 app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
   try {
+    console.log('PDF to Word conversion request received');
+    
     if (!req.file) {
+      console.log('No file uploaded');
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
     const inputFile = req.file.path;
     const outputFile = inputFile.replace('.pdf', '.docx');
     const quality = req.body.quality || 'standard';
+
+    console.log('File received:', req.file.originalname, 'Size:', req.file.size);
+    console.log('Input file:', inputFile);
+    console.log('Output file:', outputFile);
+    console.log('Conversion quality:', quality);
 
     // Different conversion commands based on quality
     let libreOfficeCmd;
@@ -93,9 +112,14 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
       libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
     }
 
+    console.log('Executing command:', libreOfficeCmd);
+
     exec(libreOfficeCmd, { timeout: 120000 }, (error, stdout, stderr) => {
       if (error) {
         console.error('Conversion error:', error);
+        console.error('stderr:', stderr);
+        console.error('stdout:', stdout);
+        
         // Clean up input file
         try {
           fs.unlinkSync(inputFile);
