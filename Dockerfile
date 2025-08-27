@@ -24,10 +24,17 @@ RUN npm cache clean --force && \
 # Copy app files
 COPY . .
 
-# Create a non-root user for security
-RUN useradd -r -u 1001 -g root nodeuser && \
-    chown -R nodeuser:root /app
-USER nodeuser
+# Create necessary directories for LibreOffice
+RUN mkdir -p /root/.config /root/.cache /root/.local/share
 
+# Set environment variables for LibreOffice
+ENV HOME=/root
+ENV XDG_CONFIG_HOME=/root/.config
+ENV XDG_CACHE_HOME=/root/.cache
+ENV XDG_DATA_HOME=/root/.local/share
+
+# Expose port
 EXPOSE 3000
+
+# Run as root to avoid permission issues
 CMD ["node", "server.js"]

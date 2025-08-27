@@ -156,21 +156,13 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
       console.log('Output file:', outputFile);
       console.log('Conversion quality:', quality);
 
-      // Different conversion commands based on quality
-      let libreOfficeCmd;
-      if (quality === 'enhanced') {
-        // Enhanced conversion with better formatting preservation
-        libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML --infilter="Impress MS PowerPoint 2007 XML" "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
-      } else {
-        // Standard conversion
-        libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
-      }
-
+      // Try primary conversion method with simpler options
+      const libreOfficeCmd = `libreoffice --headless --convert-to docx --outdir "${path.dirname(outputFile)}" "${inputFile}"`;
       console.log('Executing command:', libreOfficeCmd);
 
       exec(libreOfficeCmd, { timeout: 120000 }, (error, stdout, stderr) => {
         if (error) {
-          console.error('Conversion error:', error);
+          console.error('Conversion failed:', error);
           console.error('stderr:', stderr);
           console.error('stdout:', stdout);
           
@@ -185,7 +177,7 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
             return res.status(408).json({ 
               success: false,
               error: 'Conversion timed out. PDF may be too complex or large.',
-              suggestion: 'Try with standard quality or a simpler PDF'
+              suggestion: 'Try with a simpler PDF'
             });
           }
           
@@ -197,11 +189,18 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
           });
         }
 
+        console.log('Conversion completed successfully');
+        console.log('stdout:', stdout);
+        if (stderr) console.log('stderr:', stderr);
+
         // Check if output file exists
         if (fs.existsSync(outputFile)) {
           // Validate the output file
           const stats = fs.statSync(outputFile);
+          console.log('Output file size:', stats.size);
+          
           if (stats.size === 0) {
+            console.log('Output file is empty');
             // Clean up files
             try {
               fs.unlinkSync(inputFile);
@@ -216,17 +215,23 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
             });
           }
 
+          console.log('Sending file for download');
           // Send the DOCX file
           res.download(outputFile, path.basename(outputFile), (err) => {
+            if (err) {
+              console.error('Download error:', err);
+            }
             // Clean up files after download
             try {
               fs.unlinkSync(inputFile);
               fs.unlinkSync(outputFile);
+              console.log('Files cleaned up successfully');
             } catch (cleanupError) {
               console.error('Cleanup error:', cleanupError);
             }
           });
         } else {
+          console.log('Output file not found:', outputFile);
           // Clean up input file
           try {
             fs.unlinkSync(inputFile);
