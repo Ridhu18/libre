@@ -231,6 +231,10 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
       const outputFile = path.join(inputDir, `${inputBasename}.docx`);
       const quality = req.body.quality || 'standard';
       
+      // Sanitize filenames to avoid LibreOffice path issues
+      const sanitizedInputBasename = inputBasename.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const sanitizedOutputFile = path.join(inputDir, `${sanitizedInputBasename}.docx`);
+      
       // Verify input file is a PDF
       const inputExt = path.extname(req.file.originalname).toLowerCase();
       if (inputExt !== '.pdf') {
@@ -242,17 +246,96 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
           suggestion: 'Please upload a PDF file'
         });
       }
+      
+      // Additional PDF validation by checking file header
+      try {
+        const fileBuffer = fs.readFileSync(inputFile, { start: 0, end: 4 });
+        const fileHeader = fileBuffer.toString('hex');
+        if (!fileHeader.startsWith('25504446')) { // PDF magic bytes: %PDF
+          console.error('File does not have valid PDF header:', fileHeader);
+          return res.status(400).json({ 
+            success: false,
+            error: 'Invalid PDF file',
+            details: 'File does not contain valid PDF content',
+            suggestion: 'Please upload a valid PDF file'
+          });
+        }
+        console.log('PDF header validation passed:', fileHeader);
+      } catch (headerError) {
+        console.error('Error reading file header:', headerError);
+        return res.status(500).json({ 
+          success: false,
+          error: 'File validation failed',
+          details: 'Could not read file content for validation',
+          suggestion: 'Please try uploading the file again'
+        });
+      }
 
       console.log('File received:', req.file.originalname, 'Size:', req.file.size);
       console.log('Input file:', inputFile);
       console.log('Output file:', outputFile);
+      console.log('Sanitized output file:', sanitizedOutputFile);
       console.log('Conversion quality:', quality);
+
+      // Verify input file exists and is readable
+      if (!fs.existsSync(inputFile)) {
+        console.error('Input file does not exist:', inputFile);
+        return res.status(500).json({ 
+          success: false,
+          error: 'Input file not found',
+          suggestion: 'Please try uploading the file again'
+        });
+      }
+      
+      // Verify output directory is writable
+      try {
+        const testFile = path.join(inputDir, '.test-write');
+        fs.writeFileSync(testFile, 'test');
+        fs.unlinkSync(testFile);
+        console.log('Output directory is writable:', inputDir);
+      } catch (writeError) {
+        console.error('Output directory is not writable:', inputDir, writeError);
+        return res.status(500).json({ 
+          success: false,
+          error: 'Server configuration error',
+          details: 'Output directory is not writable',
+          suggestion: 'Please contact support'
+        });
+      }
 
       // Try primary conversion method with explicit file type handling
       const libreOfficeCmd = `libreoffice --headless --convert-to docx --outdir "${inputDir}" "${inputFile}"`;
       console.log('Executing command:', libreOfficeCmd);
       console.log('Input file type:', path.extname(req.file.originalname));
       console.log('Expected output file:', outputFile);
+      console.log('Input file exists:', fs.existsSync(inputFile));
+      console.log('Input file size:', fs.statSync(inputFile).size);
+      console.log('Input file permissions:', fs.statSync(inputFile).mode);
+      console.log('Input file absolute path:', path.resolve(inputFile));
+      console.log('Output directory absolute path:', path.resolve(inputDir));
+      console.log('LibreOffice version check...');
+      
+      // Check LibreOffice version and processes
+      exec('libreoffice --version', (versionError, versionOutput) => {
+        if (!versionError) {
+          console.log('LibreOffice version:', versionOutput.trim());
+        } else {
+          console.error('LibreOffice version check failed:', versionError.message);
+        }
+      });
+      
+      // Check for stuck LibreOffice processes
+      exec('ps aux | grep libreoffice | grep -v grep | wc -l', (psError, psOutput) => {
+        if (!psError) {
+          const processCount = parseInt(psOutput.trim());
+          console.log('Current LibreOffice processes:', processCount);
+          if (processCount > 5) {
+            console.warn('Warning: Many LibreOffice processes running, may cause issues');
+          }
+        } else {
+          console.log('Could not check LibreOffice processes:', psError.message);
+        }
+      });
 
       exec(libreOfficeCmd, { timeout: 120000 }, (error, stdout, stderr) => {
         if (error) {
@@ -276,11 +359,11 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
           }
           
           // Check for specific LibreOffice errors
-          if (stderr && stderr.includes('no export filter')) {
+          if (stderr && (stderr.includes('no export filter') || stderr.includes('aborting'))) {
             console.log('Export filter error detected, trying alternative conversion method...');
             
-            // Try alternative conversion method
-            const altCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML --outdir "${inputDir}" "${inputFile}"`;
+            // Try alternative conversion method with different filter
+            const altCmd = `libreoffice --headless --convert-to "docx:MS Word 2007 XML" --outdir "${inputDir}" "${inputFile}"`;
             console.log('Trying alternative command:', altCmd);
             
             exec(altCmd, { timeout: 120000 }, (altError, altStdout, altStderr) => {
@@ -288,19 +371,70 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
                 console.error('Alternative conversion also failed:', altError);
                 console.error('Alternative stderr:', altStderr);
                 
-                // Clean up input file
-                try {
-                  fs.unlinkSync(inputFile);
-                } catch (cleanupError) {
-                  console.error('Input file cleanup error:', cleanupError);
-                }
+                // Try third fallback method: convert to RTF first, then to DOCX
+                console.log('Trying third fallback method: RTF -> DOCX...');
+                const rtfOutputFile = path.join(inputDir, `${sanitizedInputBasename}.rtf`);
+                const rtfCmd = `libreoffice --headless --convert-to rtf --outdir "${inputDir}" "${inputFile}"`;
                 
-                return res.status(500).json({ 
-                  success: false,
-                  error: 'All conversion methods failed', 
-                  details: 'LibreOffice could not process this PDF file with any available method',
-                  suggestion: 'The PDF may be corrupted, password-protected, or contain unsupported content. Try with a different PDF.'
+                exec(rtfCmd, { timeout: 120000 }, (rtfError, rtfStdout, rtfStderr) => {
+                  if (rtfError) {
+                    console.error('RTF conversion failed:', rtfError);
+                    
+                    // Clean up input file
+                    try {
+                      fs.unlinkSync(inputFile);
+                    } catch (cleanupError) {
+                      console.error('Input file cleanup error:', cleanupError);
+                    }
+                    
+                    return res.status(500).json({ 
+                      success: false,
+                      error: 'All conversion methods failed', 
+                      details: 'LibreOffice could not process this PDF file with any available method',
+                      suggestion: 'The PDF may be corrupted, password-protected, or contain unsupported content. Try with a different PDF.'
+                    });
+                  }
+                  
+                  console.log('RTF conversion succeeded, now converting RTF to DOCX...');
+                  
+                  // Now convert RTF to DOCX
+                  const finalCmd = `libreoffice --headless --convert-to docx --outdir "${inputDir}" "${rtfOutputFile}"`;
+                  
+                  exec(finalCmd, { timeout: 120000 }, (finalError, finalStdout, finalStderr) => {
+                    // Clean up RTF file
+                    try {
+                      if (fs.existsSync(rtfOutputFile)) {
+                        fs.unlinkSync(rtfOutputFile);
+                      }
+                    } catch (cleanupError) {
+                      console.error('RTF cleanup error:', cleanupError);
+                    }
+                    
+                    if (finalError) {
+                      console.error('Final DOCX conversion failed:', finalError);
+                      
+                      // Clean up input file
+                      try {
+                        fs.unlinkSync(inputFile);
+                      } catch (cleanupError) {
+                        console.error('Input file cleanup error:', cleanupError);
+                      }
+                      
+                      return res.status(500).json({ 
+                        success: false,
+                        error: 'All conversion methods failed', 
+                        details: 'LibreOffice could not process this PDF file with any available method',
+                        suggestion: 'The PDF may be corrupted, password-protected, or contain unsupported content. Try with a different PDF.'
+                      });
+                    }
+                    
+                    console.log('RTF to DOCX conversion succeeded');
+                    // Continue with the final conversion result
+                    processConversionResult(finalStdout, finalStderr);
+                  });
                 });
+                
+                return; // Exit alternative method
               }
               
               console.log('Alternative conversion succeeded');
@@ -314,6 +448,15 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
           if (stderr && stderr.includes('failed to launch javaldx')) {
             console.log('Java warning detected, but continuing...');
           }
+          
+          // Log additional error details for debugging
+          console.error('Conversion error details:', {
+            code: error.code,
+            signal: error.signal,
+            killed: error.killed,
+            stderr: stderr,
+            stdout: stdout
+          });
           
           return res.status(500).json({ 
             success: false,
@@ -333,10 +476,30 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
       
       // Helper function to process the conversion result
       function processConversionResult(stdout, stderr) {
-        // Check if output file exists
-        if (fs.existsSync(outputFile)) {
+        // Check if output file exists (try both original and sanitized names)
+        let actualOutputFile = outputFile;
+        if (!fs.existsSync(outputFile) && fs.existsSync(sanitizedOutputFile)) {
+          actualOutputFile = sanitizedOutputFile;
+          console.log('Using sanitized output file:', actualOutputFile);
+        }
+        
+        // If neither exists, try to find any .docx file in the output directory
+        if (!fs.existsSync(actualOutputFile)) {
+          try {
+            const files = fs.readdirSync(inputDir);
+            const docxFile = files.find(file => file.endsWith('.docx'));
+            if (docxFile) {
+              actualOutputFile = path.join(inputDir, docxFile);
+              console.log('Found output file with different name:', actualOutputFile);
+            }
+          } catch (dirError) {
+            console.error('Error reading output directory:', dirError);
+          }
+        }
+        
+        if (fs.existsSync(actualOutputFile)) {
           // Validate the output file
-          const stats = fs.statSync(outputFile);
+          const stats = fs.statSync(actualOutputFile);
           console.log('Output file size:', stats.size);
           
           if (stats.size === 0) {
@@ -344,7 +507,7 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
             // Clean up files
             try {
               fs.unlinkSync(inputFile);
-              fs.unlinkSync(outputFile);
+              fs.unlinkSync(actualOutputFile);
             } catch (cleanupError) {
               console.error('Cleanup error:', cleanupError);
             }
@@ -354,17 +517,43 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
               suggestion: 'PDF may be corrupted or contain unsupported content'
             });
           }
+          
+          // Additional validation: check if file is actually a valid DOCX
+          try {
+            const docxBuffer = fs.readFileSync(actualOutputFile, { start: 0, end: 4 });
+            const docxHeader = docxBuffer.toString('hex');
+            if (!docxHeader.startsWith('504b0304')) { // DOCX magic bytes: PK\x03\x04
+              console.error('Output file does not have valid DOCX header:', docxHeader);
+              // Clean up files
+              try {
+                fs.unlinkSync(inputFile);
+                fs.unlinkSync(actualOutputFile);
+              } catch (cleanupError) {
+                console.error('Cleanup error:', cleanupError);
+              }
+              return res.status(500).json({ 
+                success: false,
+                error: 'Conversion failed - invalid output file',
+                details: 'Generated file is not a valid DOCX',
+                suggestion: 'PDF may be corrupted or contain unsupported content'
+              });
+            }
+            console.log('DOCX header validation passed:', docxHeader);
+          } catch (docxError) {
+            console.error('Error reading DOCX header:', docxError);
+            // Continue anyway as the file might still be valid
+          }
 
           console.log('Sending file for download');
           // Send the DOCX file
-          res.download(outputFile, path.basename(outputFile), (err) => {
+          res.download(actualOutputFile, path.basename(actualOutputFile), (err) => {
             if (err) {
               console.error('Download error:', err);
             }
             // Clean up files after download
             try {
               fs.unlinkSync(inputFile);
-              fs.unlinkSync(outputFile);
+              fs.unlinkSync(actualOutputFile);
               console.log('Files cleaned up successfully');
             } catch (cleanupError) {
               console.error('Cleanup error:', cleanupError);
