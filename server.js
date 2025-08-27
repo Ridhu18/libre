@@ -41,7 +41,48 @@ const upload = multer({ storage: storage });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', service: 'libree-pdf-converter', timestamp: new Date().toISOString() });
+  // Check if LibreOffice is available
+  exec('libreoffice --version', (error, stdout, stderr) => {
+    if (error) {
+      console.error('LibreOffice not available:', error);
+      res.json({ 
+        status: 'WARNING', 
+        service: 'libree-pdf-converter', 
+        timestamp: new Date().toISOString(),
+        libreoffice: 'NOT_AVAILABLE',
+        error: error.message
+      });
+    } else {
+      console.log('LibreOffice version:', stdout.trim());
+      res.json({ 
+        status: 'OK', 
+        service: 'libree-pdf-converter', 
+        timestamp: new Date().toISOString(),
+        libreoffice: 'AVAILABLE',
+        version: stdout.trim()
+      });
+    }
+  });
+});
+
+// Test LibreOffice endpoint
+app.get('/test-libreoffice', (req, res) => {
+  exec('libreoffice --version', (error, stdout, stderr) => {
+    if (error) {
+      res.json({ 
+        success: false,
+        error: 'LibreOffice not available',
+        details: error.message,
+        command: 'libreoffice --version'
+      });
+    } else {
+      res.json({ 
+        success: true,
+        version: stdout.trim(),
+        command: 'libreoffice --version'
+      });
+    }
+  });
 });
 
 // Convert DOCX to PDF
@@ -93,99 +134,113 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const inputFile = req.file.path;
-    const outputFile = inputFile.replace('.pdf', '.docx');
-    const quality = req.body.quality || 'standard';
-
-    console.log('File received:', req.file.originalname, 'Size:', req.file.size);
-    console.log('Input file:', inputFile);
-    console.log('Output file:', outputFile);
-    console.log('Conversion quality:', quality);
-
-    // Different conversion commands based on quality
-    let libreOfficeCmd;
-    if (quality === 'enhanced') {
-      // Enhanced conversion with better formatting preservation
-      libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML --infilter="Impress MS PowerPoint 2007 XML" "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
-    } else {
-      // Standard conversion
-      libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
-    }
-
-    console.log('Executing command:', libreOfficeCmd);
-
-    exec(libreOfficeCmd, { timeout: 120000 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error('Conversion error:', error);
-        console.error('stderr:', stderr);
-        console.error('stdout:', stdout);
-        
-        // Clean up input file
-        try {
-          fs.unlinkSync(inputFile);
-        } catch (cleanupError) {
-          console.error('Input file cleanup error:', cleanupError);
-        }
-        
-        if (error.code === 'ETIMEDOUT') {
-          return res.status(408).json({ 
-            success: false,
-            error: 'Conversion timed out. PDF may be too complex or large.',
-            suggestion: 'Try with standard quality or a simpler PDF'
-          });
-        }
-        
+    // Check if LibreOffice is available
+    exec('libreoffice --version', (libreOfficeError) => {
+      if (libreOfficeError) {
+        console.error('LibreOffice not available:', libreOfficeError);
         return res.status(500).json({ 
           success: false,
-          error: 'Conversion failed', 
-          details: error.message,
-          suggestion: 'Try with a different PDF or check if the PDF is corrupted'
+          error: 'LibreOffice is not available on this server',
+          details: libreOfficeError.message,
+          suggestion: 'Please contact support or try again later'
         });
       }
+      
+      // Continue with conversion if LibreOffice is available
+      const inputFile = req.file.path;
+      const outputFile = inputFile.replace('.pdf', '.docx');
+      const quality = req.body.quality || 'standard';
 
-      // Check if output file exists
-      if (fs.existsSync(outputFile)) {
-        // Validate the output file
-        const stats = fs.statSync(outputFile);
-        if (stats.size === 0) {
-          // Clean up files
+      console.log('File received:', req.file.originalname, 'Size:', req.file.size);
+      console.log('Input file:', inputFile);
+      console.log('Output file:', outputFile);
+      console.log('Conversion quality:', quality);
+
+      // Different conversion commands based on quality
+      let libreOfficeCmd;
+      if (quality === 'enhanced') {
+        // Enhanced conversion with better formatting preservation
+        libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML --infilter="Impress MS PowerPoint 2007 XML" "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
+      } else {
+        // Standard conversion
+        libreOfficeCmd = `libreoffice --headless --convert-to docx:MS Word 2007 XML "${inputFile}" --outdir "${path.dirname(outputFile)}"`;
+      }
+
+      console.log('Executing command:', libreOfficeCmd);
+
+      exec(libreOfficeCmd, { timeout: 120000 }, (error, stdout, stderr) => {
+        if (error) {
+          console.error('Conversion error:', error);
+          console.error('stderr:', stderr);
+          console.error('stdout:', stdout);
+          
+          // Clean up input file
           try {
             fs.unlinkSync(inputFile);
-            fs.unlinkSync(outputFile);
           } catch (cleanupError) {
-            console.error('Cleanup error:', cleanupError);
+            console.error('Input file cleanup error:', cleanupError);
           }
+          
+          if (error.code === 'ETIMEDOUT') {
+            return res.status(408).json({ 
+              success: false,
+              error: 'Conversion timed out. PDF may be too complex or large.',
+              suggestion: 'Try with standard quality or a simpler PDF'
+            });
+          }
+          
           return res.status(500).json({ 
             success: false,
-            error: 'Conversion failed - output file is empty',
-            suggestion: 'PDF may be corrupted or contain unsupported content'
+            error: 'Conversion failed', 
+            details: error.message,
+            suggestion: 'Try with a different PDF or check if the PDF is corrupted'
           });
         }
 
-        // Send the DOCX file
-        res.download(outputFile, path.basename(outputFile), (err) => {
-          // Clean up files after download
+        // Check if output file exists
+        if (fs.existsSync(outputFile)) {
+          // Validate the output file
+          const stats = fs.statSync(outputFile);
+          if (stats.size === 0) {
+            // Clean up files
+            try {
+              fs.unlinkSync(inputFile);
+              fs.unlinkSync(outputFile);
+            } catch (cleanupError) {
+              console.error('Cleanup error:', cleanupError);
+            }
+            return res.status(500).json({ 
+              success: false,
+              error: 'Conversion failed - output file is empty',
+              suggestion: 'PDF may be corrupted or contain unsupported content'
+            });
+          }
+
+          // Send the DOCX file
+          res.download(outputFile, path.basename(outputFile), (err) => {
+            // Clean up files after download
+            try {
+              fs.unlinkSync(inputFile);
+              fs.unlinkSync(outputFile);
+            } catch (cleanupError) {
+              console.error('Cleanup error:', cleanupError);
+            }
+          });
+        } else {
+          // Clean up input file
           try {
             fs.unlinkSync(inputFile);
-            fs.unlinkSync(outputFile);
           } catch (cleanupError) {
-            console.error('Cleanup error:', cleanupError);
+            console.error('Input file cleanup error:', cleanupError);
           }
-        });
-      } else {
-        // Clean up input file
-        try {
-          fs.unlinkSync(inputFile);
-        } catch (cleanupError) {
-          console.error('Input file cleanup error:', cleanupError);
+          
+          res.status(500).json({ 
+            success: false,
+            error: 'Output file not generated',
+            suggestion: 'PDF may be corrupted or LibreOffice conversion failed'
+          });
         }
-        
-        res.status(500).json({ 
-          success: false,
-          error: 'Output file not generated',
-          suggestion: 'PDF may be corrupted or LibreOffice conversion failed'
-        });
-      }
+      });
     });
   } catch (error) {
     console.error('Server error:', error);
