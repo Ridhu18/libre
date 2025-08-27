@@ -86,7 +86,7 @@ app.get('/test-libreoffice', (req, res) => {
 });
 
 // Convert DOCX to PDF
-app.post('/convert/docx-to-pdf', upload.single('file'), async (req, res) => {
+app.post('/convert-docx-to-pdf', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -96,6 +96,84 @@ app.post('/convert/docx-to-pdf', upload.single('file'), async (req, res) => {
     const outputFile = inputFile.replace('.docx', '.pdf');
 
     // Use LibreOffice to convert DOCX to PDF
+    exec(`libreoffice --headless --convert-to pdf "${inputFile}" --outdir "${path.dirname(outputFile)}"`, (error, stdout, stderr) => {
+      if (error) {
+        console.error('Conversion error:', error);
+        return res.status(500).json({ error: 'Conversion failed', details: error.message });
+      }
+
+      // Check if output file exists
+      if (fs.existsSync(outputFile)) {
+        // Send the PDF file
+        res.download(outputFile, path.basename(outputFile), (err) => {
+          // Clean up files after download
+          try {
+            fs.unlinkSync(inputFile);
+            fs.unlinkSync(outputFile);
+          } catch (cleanupError) {
+            console.error('Cleanup error:', cleanupError);
+          }
+        });
+      } else {
+        res.status(500).json({ error: 'Output file not generated' });
+      }
+    });
+  } catch (error) {
+    console.error('Server error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Convert XLSX to PDF
+app.post('/convert-xlsx-to-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const inputFile = req.file.path;
+    const outputFile = inputFile.replace('.xlsx', '.pdf');
+
+    // Use LibreOffice to convert XLSX to PDF
+    exec(`libreoffice --headless --convert-to pdf "${inputFile}" --outdir "${path.dirname(outputFile)}"`, (error, stdout, stderr) => {
+      if (error) {
+        console.error('Conversion error:', error);
+        return res.status(500).json({ error: 'Conversion failed', details: error.message });
+      }
+
+      // Check if output file exists
+      if (fs.existsSync(outputFile)) {
+        // Send the PDF file
+        res.download(outputFile, path.basename(outputFile), (err) => {
+          // Clean up files after download
+          try {
+            fs.unlinkSync(inputFile);
+            fs.unlinkSync(outputFile);
+          } catch (cleanupError) {
+            console.error('Cleanup error:', cleanupError);
+          }
+        });
+      } else {
+        res.status(500).json({ error: 'Output file not generated' });
+      }
+    });
+  } catch (error) {
+    console.error('Server error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Convert PPTX to PDF
+app.post('/convert-pptx-to-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const inputFile = req.file.path;
+    const outputFile = inputFile.replace('.pptx', '.pdf');
+
+    // Use LibreOffice to convert PPTX to PDF
     exec(`libreoffice --headless --convert-to pdf "${inputFile}" --outdir "${path.dirname(outputFile)}"`, (error, stdout, stderr) => {
       if (error) {
         console.error('Conversion error:', error);
