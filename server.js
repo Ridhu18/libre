@@ -233,6 +233,132 @@ app.post('/convert-pptx-to-pdf', upload.single('file'), (req, res) => {
   }
 });
 
+// Alternative PDF to Word conversion using different approach
+app.post('/convert-pdf-to-word-alt', upload.single('file'), (req, res) => {
+  console.log('Alternative PDF to Word conversion request received');
+  
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  const inputFile = req.file.path;
+  const inputDir = path.dirname(inputFile);
+  const inputBasename = path.basename(req.file.originalname, path.extname(req.file.originalname));
+  
+  console.log('Input file:', inputFile);
+  console.log('Input directory:', inputDir);
+  console.log('Input basename:', inputBasename);
+
+  // Try using unoconv if available
+  const commands = [
+    `unoconv -f docx "${inputFile}"`,
+    `unoconv -f doc "${inputFile}"`,
+    `unoconv -f rtf "${inputFile}"`,
+    `libreoffice --headless --convert-to txt "${inputFile}" --outdir "${inputDir}"`,
+    `pdftotext "${inputFile}" "${path.join(inputDir, inputBasename)}.txt"`
+  ];
+  
+  let commandIndex = 0;
+  
+  function tryConversion() {
+    if (commandIndex >= commands.length) {
+      return res.status(500).json({ 
+        error: 'All alternative conversion methods failed',
+        details: 'No suitable conversion tool found for PDF to Word',
+        availableFilters: 'Only writer_pdf_Export available'
+      });
+    }
+    
+    const command = commands[commandIndex];
+    console.log(`Trying alternative command ${commandIndex + 1}:`, command);
+  
+    exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
+      console.log('Command executed:', command);
+      console.log('Error:', error);
+      console.log('stdout:', stdout);
+      console.log('stderr:', stderr);
+      
+      if (error) {
+        console.error(`Alternative command ${commandIndex + 1} failed:`, error);
+        commandIndex++;
+        return tryConversion();
+      }
+      
+      // Look for output files
+      const extensions = ['.docx', '.doc', '.rtf', '.txt'];
+      let foundFile = null;
+      
+      for (const ext of extensions) {
+        const expectedOutputFile = path.join(inputDir, `${inputBasename}${ext}`);
+        if (fs.existsSync(expectedOutputFile)) {
+          foundFile = expectedOutputFile;
+          break;
+        }
+      }
+      
+      if (foundFile) {
+        console.log('Alternative conversion successful, file size:', fs.statSync(foundFile).size);
+        
+        // Send the file
+        res.download(foundFile, `${inputBasename}${path.extname(foundFile)}`, (err) => {
+          if (err) {
+            console.error('Download error:', err);
+          }
+          // Clean up
+          try {
+            fs.unlinkSync(inputFile);
+            fs.unlinkSync(foundFile);
+          } catch (cleanupError) {
+            console.error('Cleanup error:', cleanupError);
+          }
+        });
+      } else {
+        console.log('Alternative output file not found');
+        
+        // Try to find any output file in the directory
+        try {
+          const files = fs.readdirSync(inputDir);
+          console.log('Files in directory:', files);
+          const outputFiles = files.filter(file => 
+            file.endsWith('.docx') || file.endsWith('.doc') || file.endsWith('.rtf') || file.endsWith('.txt')
+          );
+          console.log('Output files found:', outputFiles);
+          
+          if (outputFiles.length > 0) {
+            const foundOutputFile = path.join(inputDir, outputFiles[0]);
+            console.log('Found output file:', foundOutputFile);
+            
+            res.download(foundOutputFile, outputFiles[0], (err) => {
+              if (err) {
+                console.error('Download error:', err);
+              }
+              // Clean up
+              try {
+                fs.unlinkSync(inputFile);
+                fs.unlinkSync(foundOutputFile);
+              } catch (cleanupError) {
+                console.error('Cleanup error:', cleanupError);
+              }
+            });
+          } else {
+            // Try next command
+            commandIndex++;
+            return tryConversion();
+          }
+        } catch (dirError) {
+          console.error('Error reading directory:', dirError);
+          // Try next command
+          commandIndex++;
+          return tryConversion();
+        }
+      }
+    });
+  }
+  
+  // Start with the first command
+  tryConversion();
+});
+
 // Simple PDF to Word conversion
 app.post('/convert-pdf-to-word', upload.single('file'), (req, res) => {
   console.log('PDF to Word conversion request received');
@@ -249,120 +375,84 @@ app.post('/convert-pdf-to-word', upload.single('file'), (req, res) => {
   console.log('Input directory:', inputDir);
   console.log('Input basename:', inputBasename);
 
-  // First, let's check what filters are available
-  exec('libreoffice --headless --infilter="?"', (filterError, filterStdout, filterStderr) => {
-    console.log('Available filters:', filterStdout);
-    console.log('Filter stderr:', filterStderr);
+  // Simple LibreOffice conversion
+  const command = `libreoffice --headless --convert-to docx "${inputFile}" --outdir "${inputDir}"`;
+  
+  exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
+    console.log('Command executed:', command);
+    console.log('Error:', error);
+    console.log('stdout:', stdout);
+    console.log('stderr:', stderr);
     
-    // Try different LibreOffice conversion commands
-    const commands = [
-      `libreoffice --headless --convert-to docx "${inputFile}" --outdir "${inputDir}"`,
-      `libreoffice --headless --convert-to "MS Word 2007 XML" "${inputFile}" --outdir "${inputDir}"`,
-      `libreoffice --headless --convert-to "writer_pdf_import" "${inputFile}" --outdir "${inputDir}"`,
-      `libreoffice --headless --convert-to "writer8" "${inputFile}" --outdir "${inputDir}"`,
-      `libreoffice --headless --convert-to "writer_web" "${inputFile}" --outdir "${inputDir}"`,
-      `libreoffice --headless --convert-to "writer_rtf" "${inputFile}" --outdir "${inputDir}"`
-    ];
+    if (error) {
+      console.error('Conversion failed:', error);
+      return res.status(500).json({ 
+        error: 'Conversion failed',
+        details: error.message
+      });
+    }
     
-    let commandIndex = 0;
+    // Look for the output file - LibreOffice creates it with the same name but .docx extension
+    const expectedOutputFile = path.join(inputDir, `${inputBasename}.docx`);
+    console.log('Expected output file:', expectedOutputFile);
     
-    function tryConversion() {
-      if (commandIndex >= commands.length) {
-        return res.status(500).json({ 
-          error: 'All conversion methods failed',
-          details: 'LibreOffice could not convert the PDF file',
-          availableFilters: filterStdout
-        });
-      }
+    // Check if output file was created
+    if (fs.existsSync(expectedOutputFile)) {
+      console.log('Conversion successful, file size:', fs.statSync(expectedOutputFile).size);
       
-      const command = commands[commandIndex];
-      console.log(`Trying command ${commandIndex + 1}:`, command);
-    
-      exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
-        console.log('Command executed:', command);
-        console.log('Error:', error);
-        console.log('stdout:', stdout);
-        console.log('stderr:', stderr);
-        
-        if (error) {
-          console.error(`Command ${commandIndex + 1} failed:`, error);
-          commandIndex++;
-          return tryConversion();
+      // Send the file
+      res.download(expectedOutputFile, `${inputBasename}.docx`, (err) => {
+        if (err) {
+          console.error('Download error:', err);
         }
-        
-        // Look for the output file - LibreOffice creates it with the same name but different extension
-        const extensions = ['.docx', '.doc', '.rtf', '.html'];
-        let foundFile = null;
-        
-        for (const ext of extensions) {
-          const expectedOutputFile = path.join(inputDir, `${inputBasename}${ext}`);
-          if (fs.existsSync(expectedOutputFile)) {
-            foundFile = expectedOutputFile;
-            break;
-          }
+        // Clean up
+        try {
+          fs.unlinkSync(inputFile);
+          fs.unlinkSync(expectedOutputFile);
+        } catch (cleanupError) {
+          console.error('Cleanup error:', cleanupError);
         }
+      });
+    } else {
+      console.log('Output file not found at:', expectedOutputFile);
+      
+      // Try to find any .docx file in the directory
+      try {
+        const files = fs.readdirSync(inputDir);
+        console.log('Files in directory:', files);
+        const docxFiles = files.filter(file => file.endsWith('.docx'));
+        console.log('DOCX files found:', docxFiles);
         
-        if (foundFile) {
-          console.log('Conversion successful, file size:', fs.statSync(foundFile).size);
+        if (docxFiles.length > 0) {
+          const foundOutputFile = path.join(inputDir, docxFiles[0]);
+          console.log('Found DOCX file:', foundOutputFile);
           
-          // Send the file
-          res.download(foundFile, `${inputBasename}${path.extname(foundFile)}`, (err) => {
+          res.download(foundOutputFile, `${inputBasename}.docx`, (err) => {
             if (err) {
               console.error('Download error:', err);
             }
             // Clean up
             try {
               fs.unlinkSync(inputFile);
-              fs.unlinkSync(foundFile);
+              fs.unlinkSync(foundOutputFile);
             } catch (cleanupError) {
               console.error('Cleanup error:', cleanupError);
             }
           });
         } else {
-          console.log('Output file not found');
-          
-          // Try to find any output file in the directory
-          try {
-            const files = fs.readdirSync(inputDir);
-            console.log('Files in directory:', files);
-            const outputFiles = files.filter(file => 
-              file.endsWith('.docx') || file.endsWith('.doc') || file.endsWith('.rtf') || file.endsWith('.html')
-            );
-            console.log('Output files found:', outputFiles);
-            
-            if (outputFiles.length > 0) {
-              const foundOutputFile = path.join(inputDir, outputFiles[0]);
-              console.log('Found output file:', foundOutputFile);
-              
-              res.download(foundOutputFile, outputFiles[0], (err) => {
-                if (err) {
-                  console.error('Download error:', err);
-                }
-                // Clean up
-                try {
-                  fs.unlinkSync(inputFile);
-                  fs.unlinkSync(foundOutputFile);
-                } catch (cleanupError) {
-                  console.error('Cleanup error:', cleanupError);
-                }
-              });
-            } else {
-              // Try next command
-              commandIndex++;
-              return tryConversion();
-            }
-          } catch (dirError) {
-            console.error('Error reading directory:', dirError);
-            // Try next command
-            commandIndex++;
-            return tryConversion();
-          }
+          return res.status(500).json({ 
+            error: 'Output file not generated',
+            details: 'LibreOffice conversion completed but no DOCX file found'
+          });
         }
-      });
+      } catch (dirError) {
+        console.error('Error reading directory:', dirError);
+        return res.status(500).json({ 
+          error: 'Output file not generated',
+          details: 'Could not read output directory'
+        });
+      }
     }
-    
-    // Start with the first command
-    tryConversion();
   });
 });
 
