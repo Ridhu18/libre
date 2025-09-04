@@ -11,13 +11,23 @@ const PORT = process.env.PORT || 3000;
 
 // CORS configuration
 const corsOptions = {
-  origin: 'https://novenutility123.netlify.app',
+  origin: [
+    'https://novenutility123.netlify.app',
+    'https://novenutility.netlify.app',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://libre-vljo.onrender.com'
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'Content-Length'],
+  exposedHeaders: ['Content-Disposition', 'Content-Type', 'Content-Length']
 };
 
 app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 // Middleware
 app.use(express.json());
@@ -97,6 +107,19 @@ app.get('/test-pdf-conversion', (req, res) => {
       'Automatic output file detection',
       'Comprehensive error handling'
     ]
+  });
+});
+
+// Simple test endpoint for CORS debugging
+app.post('/test-cors', (req, res) => {
+  console.log('CORS test request received');
+  console.log('Request headers:', req.headers);
+  console.log('Request origin:', req.headers.origin);
+  res.json({
+    success: true,
+    message: 'CORS test successful',
+    origin: req.headers.origin,
+    method: req.method
   });
 });
 
@@ -221,6 +244,9 @@ app.post('/convert-pptx-to-pdf', upload.single('file'), async (req, res) => {
 app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
   try {
     console.log('PDF to Word conversion request received');
+    console.log('Request headers:', req.headers);
+    console.log('Request origin:', req.headers.origin);
+    console.log('Request method:', req.method);
     
     if (!req.file) {
       console.log('No file uploaded');
@@ -302,7 +328,6 @@ app.post('/convert-pdf-to-word', upload.single('file'), async (req, res) => {
 
       console.log('File received:', req.file.originalname, 'Size:', req.file.size);
       console.log('Input file:', inputFile);
-      console.log('Output file:', outputFile);
       console.log('Conversion quality:', quality);
 
       // Verify input file exists and is readable
