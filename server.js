@@ -249,8 +249,25 @@ app.post('/convert-pdf-to-word', upload.single('file'), (req, res) => {
   console.log('Input directory:', inputDir);
   console.log('Input basename:', inputBasename);
 
-  // Simple LibreOffice conversion
-  const command = `libreoffice --headless --convert-to docx "${inputFile}" --outdir "${inputDir}"`;
+  // Try different LibreOffice conversion commands
+  const commands = [
+    `libreoffice --headless --convert-to docx "${inputFile}" --outdir "${inputDir}"`,
+    `libreoffice --headless --convert-to "MS Word 2007 XML" "${inputFile}" --outdir "${inputDir}"`,
+    `libreoffice --headless --convert-to "writer_pdf_import" "${inputFile}" --outdir "${inputDir}"`
+  ];
+  
+  let commandIndex = 0;
+  
+  function tryConversion() {
+    if (commandIndex >= commands.length) {
+      return res.status(500).json({ 
+        error: 'All conversion methods failed',
+        details: 'LibreOffice could not convert the PDF file'
+      });
+    }
+    
+    const command = commands[commandIndex];
+    console.log(`Trying command ${commandIndex + 1}:`, command);
   
   exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
     console.log('Command executed:', command);
@@ -259,11 +276,9 @@ app.post('/convert-pdf-to-word', upload.single('file'), (req, res) => {
     console.log('stderr:', stderr);
     
     if (error) {
-      console.error('Conversion failed:', error);
-      return res.status(500).json({ 
-        error: 'Conversion failed',
-        details: error.message
-      });
+      console.error(`Command ${commandIndex + 1} failed:`, error);
+      commandIndex++;
+      return tryConversion();
     }
     
     // Look for the output file - LibreOffice creates it with the same name but .docx extension
@@ -314,20 +329,21 @@ app.post('/convert-pdf-to-word', upload.single('file'), (req, res) => {
             }
           });
         } else {
-          return res.status(500).json({ 
-            error: 'Output file not generated',
-            details: 'LibreOffice conversion completed but no DOCX file found'
-          });
+          // Try next command
+          commandIndex++;
+          return tryConversion();
         }
       } catch (dirError) {
         console.error('Error reading directory:', dirError);
-        return res.status(500).json({ 
-          error: 'Output file not generated',
-          details: 'Could not read output directory'
-        });
+        // Try next command
+        commandIndex++;
+        return tryConversion();
       }
     }
   });
+  
+  // Start with the first command
+  tryConversion();
 });
 
 // Error handling middleware
