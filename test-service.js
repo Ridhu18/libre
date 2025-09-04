@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+const fetch = require('node-fetch');
 
 async function testLibreeService() {
   const LIBREE_URL = 'https://libre-vljo.onrender.com';
