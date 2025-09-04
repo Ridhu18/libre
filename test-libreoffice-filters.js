@@ -38,3 +38,4 @@ exec('libreoffice --headless --convert-to docx test.pdf --outdir .', (error, std
     console.log('Conversion test stdout:', stdout);
   }
 });
+
