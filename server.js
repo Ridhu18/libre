@@ -341,6 +341,7 @@ app.post('/convert-pdf-to-word', upload.single('file'), (req, res) => {
       }
     }
   });
+  }
   
   // Start with the first command
   tryConversion();
